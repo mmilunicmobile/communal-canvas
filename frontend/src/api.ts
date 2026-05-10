@@ -49,13 +49,20 @@ export function getPasskey() {
   return localStorage.getItem('led_passkey') || ''
 }
 
-function adminHeaders(): Record<string, string> {
+function authHeaders(headers?: HeadersInit): Headers {
+  const merged = new Headers(headers)
   const passkey = getPasskey()
-  return passkey ? { Authorization: `Bearer ${passkey}` } : {}
+  if (passkey) {
+    merged.set('Authorization', `Bearer ${passkey}`)
+  }
+  return merged
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${getBaseUrl()}${path}`, options)
+  const response = await fetch(`${getBaseUrl()}${path}`, {
+    ...options,
+    headers: authHeaders(options.headers),
+  })
   if (!response.ok) {
     let detail = response.statusText
     try {
@@ -76,7 +83,6 @@ export function frameUrl(imageId: number) {
 export function clearFrame() {
   return request<{ pixels: Pixel[] }>('/api/clear', {
     method: 'POST',
-    headers: adminHeaders(),
   })
 }
 
@@ -85,7 +91,6 @@ export function setBrightness(brightness: number) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...adminHeaders(),
     },
     body: JSON.stringify({ brightness }),
   })
@@ -113,6 +118,22 @@ export function displayImage(id: number) {
 export function deleteImage(id: number) {
   return request<ImageRecord>(`/api/images/${id}`, {
     method: 'DELETE',
-    headers: adminHeaders(),
   })
+}
+
+export async function fetchImageBlob(imageId: number) {
+  const response = await fetch(`${getBaseUrl()}/api/images/${imageId}/file`, {
+    headers: authHeaders(),
+  })
+  if (!response.ok) {
+    let detail = response.statusText
+    try {
+      const body = await response.json()
+      detail = body.detail || detail
+    } catch {
+      // Leave the HTTP status text in place.
+    }
+    throw new Error(detail)
+  }
+  return response.blob()
 }

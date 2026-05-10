@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { HEIGHT, LED_COUNT, WIDTH, getWsUrl } from './api'
+import { HEIGHT, LED_COUNT, WIDTH, getPasskey, getWsUrl } from './api'
 import type { Pixel } from './api'
 
 const black: Pixel = [0, 0, 0]
@@ -30,6 +30,26 @@ function draw(canvas: HTMLCanvasElement, pixels: Pixel[]) {
       context.fillRect(x * cell, y * cell, cell, cell)
     }
   }
+}
+
+type PixelUpdate = {
+  x: number
+  y: number
+  r: number
+  g: number
+  b: number
+}
+
+function isPixelUpdate(value: unknown): value is PixelUpdate {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Record<string, unknown>
+  return (
+    typeof candidate.x === 'number' &&
+    typeof candidate.y === 'number' &&
+    typeof candidate.r === 'number' &&
+    typeof candidate.g === 'number' &&
+    typeof candidate.b === 'number'
+  )
 }
 
 type CanvasProps = {
@@ -83,16 +103,16 @@ export default function Canvas({
 
       socket.onmessage = (event) => {
         if (closed || wsRef.current !== socket) return
-        const update = JSON.parse(event.data) as {
-          x: number
-          y: number
-          r: number
-          g: number
-          b: number
-        }
+        const parsed = JSON.parse(event.data) as unknown
+        const updates = Array.isArray(parsed) ? parsed : [parsed]
+        const validUpdates = updates.filter(isPixelUpdate)
+        if (validUpdates.length === 0) return
+
         setPixels((current) => {
           const next = current.slice()
-          next[update.y * WIDTH + update.x] = [update.r, update.g, update.b]
+          for (const update of validUpdates) {
+            next[update.y * WIDTH + update.x] = [update.r, update.g, update.b]
+          }
           return next
         })
       }
@@ -133,7 +153,18 @@ export default function Canvas({
         next[y * WIDTH + x] = [r, g, b]
         return next
       })
-      wsRef.current?.send(JSON.stringify({ x, y, r, g, b }))
+      const passkey = getPasskey()
+      const message: { x: number; y: number; r: number; g: number; b: number; auth?: string } = {
+        x,
+        y,
+        r,
+        g,
+        b,
+      }
+      if (passkey) {
+        message.auth = passkey
+      }
+      wsRef.current?.send(JSON.stringify(message))
     },
     [color, eraser],
   )

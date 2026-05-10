@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { deleteImage, displayImage, frameUrl, getPasskey, listImages } from './api'
+import { deleteImage, displayImage, fetchImageBlob, getPasskey, listImages } from './api'
 import type { ImageRecord } from './api'
 
 type GalleryProps = {
@@ -10,17 +10,35 @@ function StaticPreview({ image }: { image: ImageRecord }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
   useEffect(() => {
-    const img = new Image()
-    img.crossOrigin = 'anonymous'
-    img.onload = () => {
-      const canvas = canvasRef.current
-      const context = canvas?.getContext('2d')
-      if (!canvas || !context) return
-      context.imageSmoothingEnabled = false
-      context.clearRect(0, 0, canvas.width, canvas.height)
-      context.drawImage(img, 0, 0, canvas.width, canvas.height)
+    let revokedUrl = ''
+    let cancelled = false
+
+    fetchImageBlob(image.id)
+      .then((blob) => {
+        if (cancelled) return
+        const img = new Image()
+        const objectUrl = URL.createObjectURL(blob)
+        revokedUrl = objectUrl
+        img.onload = () => {
+          const canvas = canvasRef.current
+          const context = canvas?.getContext('2d')
+          if (!canvas || !context) return
+          context.imageSmoothingEnabled = false
+          context.clearRect(0, 0, canvas.width, canvas.height)
+          context.drawImage(img, 0, 0, canvas.width, canvas.height)
+        }
+        img.src = objectUrl
+      })
+      .catch(() => {
+        // Ignore preview failures here; the card still renders.
+      })
+
+    return () => {
+      cancelled = true
+      if (revokedUrl) {
+        URL.revokeObjectURL(revokedUrl)
+      }
     }
-    img.src = frameUrl(image.id)
   }, [image.id])
 
   return <canvas ref={canvasRef} width={120} height={90} className="preview-canvas" />
@@ -56,7 +74,7 @@ export default function Gallery({ refreshKey }: GalleryProps) {
             <article className="image-card" key={image.id}>
               <div className="preview">
                 {image.type === 'gif' ? (
-                  <img src={frameUrl(image.id)} alt="" />
+                  <GifPreview imageId={image.id} />
                 ) : (
                   <StaticPreview image={image} />
                 )}
@@ -97,4 +115,32 @@ export default function Gallery({ refreshKey }: GalleryProps) {
       {message && <p className="notice">{message}</p>}
     </section>
   )
+}
+
+function GifPreview({ imageId }: { imageId: number }) {
+  const [src, setSrc] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    let objectUrl = ''
+
+    fetchImageBlob(imageId)
+      .then((blob) => {
+        if (cancelled) return
+        objectUrl = URL.createObjectURL(blob)
+        setSrc(objectUrl)
+      })
+      .catch(() => {
+        if (!cancelled) setSrc('')
+      })
+
+    return () => {
+      cancelled = true
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl)
+      }
+    }
+  }, [imageId])
+
+  return <img src={src} alt="" />
 }
