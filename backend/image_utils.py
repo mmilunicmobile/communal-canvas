@@ -1,7 +1,7 @@
 from io import BytesIO
 from typing import Tuple
 
-from PIL import Image, ImageOps, ImageSequence
+from PIL import Image, ImageOps
 
 from constants import GRID_HEIGHT, GRID_WIDTH
 
@@ -12,6 +12,13 @@ ALLOWED_TYPES = {
     "image/jpg": "image",
     "image/gif": "gif",
 }
+
+
+def iter_rendered_gif_frames(image: Image.Image):
+    """Yield fully rendered RGBA frames for a GIF in display order."""
+    for frame_index in range(getattr(image, "n_frames", 1)):
+        image.seek(frame_index)
+        yield image.copy().convert("RGBA")
 
 
 def _flatten_on_black(image: Image.Image) -> Image.Image:
@@ -99,18 +106,16 @@ def process_upload(file_bytes: bytes, content_type : str | None) -> Tuple[bytes,
     image_type = ALLOWED_TYPES[normalized_type]
 
     with Image.open(BytesIO(file_bytes)) as image:
-        # Apply EXIF orientation
-        image = ImageOps.exif_transpose(image)
-        
         if image_type == "gif":
             frames = []
             durations = []
 
-            for frame in ImageSequence.Iterator(image):
+            for frame_index, frame in enumerate(iter_rendered_gif_frames(image)):
                 # Resize and pad each frame
                 processed_frame = _resize_and_pad_to_grid(frame)
                 frames.append(processed_frame)
-                durations.append(frame.info.get("duration", image.info.get("duration", 100)))
+                image.seek(frame_index)
+                durations.append(image.info.get("duration", 100))
 
             if not frames:
                 raise ValueError("GIF has no frames.")
@@ -128,6 +133,9 @@ def process_upload(file_bytes: bytes, content_type : str | None) -> Tuple[bytes,
             )
             output.seek(0)
             return output.getvalue(), "gif"
+
+        # Apply EXIF orientation to static images.
+        image = ImageOps.exif_transpose(image)
 
         # Process static image (PNG, JPG)
         processed_image = _resize_and_pad_to_grid(image)

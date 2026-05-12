@@ -1,6 +1,5 @@
 import asyncio
 import os
-import subprocess
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -18,7 +17,7 @@ from fastapi import (
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from PIL import Image, ImageSequence
+from PIL import Image
 
 import database
 from constants import (
@@ -26,7 +25,7 @@ from constants import (
     GRID_WIDTH,
     PASSKEY,
 )
-from image_utils import image_to_pixels, process_upload
+from image_utils import image_to_pixels, iter_rendered_gif_frames, process_upload
 from led_driver import (
     set_brightness,
     set_frame,
@@ -53,6 +52,9 @@ app = FastAPI(lifespan=lifespan)
 connections = set()
 connections_lock = asyncio.Lock()
 animation_task = None
+pixels_lock = asyncio.Lock()
+gif_protected_pixels = set()
+active_gif_id = None
 
 app.add_middleware(
     CORSMiddleware,
@@ -79,7 +81,19 @@ def pixel_messages_from_frame(pixels):
             yield {"x": x, "y": y, "r": r, "g": g, "b": b}
 
 
+def pixel_messages_from_diff(previous_pixels, next_pixels):
+    for y in range(GRID_HEIGHT):
+        for x in range(GRID_WIDTH):
+            if previous_pixels[y][x] == next_pixels[y][x]:
+                continue
+            r, g, b = next_pixels[y][x]
+            yield {"x": x, "y": y, "r": r, "g": g, "b": b}
+
+
 async def broadcast_pixel(messages):
+    if not messages:
+        return
+
     async with connections_lock:
         targets = list(connections)
 
@@ -122,15 +136,48 @@ def cancel_animation():
     animation_task = None
 
 
-async def play_gif(path):
+def reset_gif_protection():
+    global active_gif_id
+
+    gif_protected_pixels.clear()
+    active_gif_id = None
+
+
+async def set_static_pixels(new_pixels):
     global pixels
+
+    async with pixels_lock:
+        pixels = [row[:] for row in new_pixels]
+        return [row[:] for row in pixels]
+
+
+async def apply_gif_frame(frame_pixels, gif_id):
+    global pixels
+
+    async with pixels_lock:
+        if active_gif_id != gif_id:
+            raise asyncio.CancelledError
+
+        previous_pixels = [row[:] for row in pixels]
+        merged_pixels = [row[:] for row in frame_pixels]
+        for x, y in gif_protected_pixels:
+            merged_pixels[y][x] = pixels[y][x]
+
+        pixels = merged_pixels
+        return previous_pixels, [row[:] for row in pixels]
+
+
+async def play_gif(path, gif_id):
     try:
         while True:
             with Image.open(path) as image:
-                for frame in ImageSequence.Iterator(image):
-                    pixels = image_to_pixels(frame)
-                    await asyncio.gather(write_frame(pixels), broadcast_frame(pixels))
-                    delay = max(20, int(frame.info.get("duration", 100)))
+                for frame_index, frame in enumerate(iter_rendered_gif_frames(image)):
+                    frame_pixels = image_to_pixels(frame)
+                    previous_pixels, pixels_to_show = await apply_gif_frame(frame_pixels, gif_id)
+                    changed_pixels = list(pixel_messages_from_diff(previous_pixels, pixels_to_show))
+                    await asyncio.gather(write_frame(pixels_to_show), broadcast_pixel(changed_pixels))
+                    image.seek(frame_index)
+                    delay = max(20, int(image.info.get("duration", 100)))
                     await asyncio.sleep(delay / 1000)
     except asyncio.CancelledError:
         raise
@@ -147,9 +194,11 @@ async def update_brightness(payload: dict):
 @app.post("/api/clear", dependencies=[Depends(require_admin)])
 async def clear():
     cancel_animation()
-    global pixels   
-    pixels = [[(0, 0, 0) for _ in range(GRID_WIDTH)] for _ in range(GRID_HEIGHT)]
-    await asyncio.gather(write_frame(pixels), broadcast_frame(pixels))
+    reset_gif_protection()
+    cleared_pixels = await set_static_pixels(
+        [[(0, 0, 0) for _ in range(GRID_WIDTH)] for _ in range(GRID_HEIGHT)]
+    )
+    await asyncio.gather(write_frame(cleared_pixels), broadcast_frame(cleared_pixels))
     return {"pixels": pixels}
 
 
@@ -187,7 +236,7 @@ async def upload_image(file: UploadFile = File(...)):
 @app.post("/api/images/{image_id}/display", dependencies=[Depends(require_admin)])
 async def display_image(image_id: int):
     global animation_task
-    global pixels
+    global active_gif_id
 
     record = database.get_image(image_id)
     if record is None:
@@ -199,13 +248,16 @@ async def display_image(image_id: int):
 
     cancel_animation()
     if record["type"] == "gif":
-        animation_task = asyncio.create_task(play_gif(path))
+        gif_protected_pixels.clear()
+        active_gif_id = image_id
+        animation_task = asyncio.create_task(play_gif(path, image_id))
         return {"status": "animating", "id": image_id}
 
     with Image.open(path) as image:
-        pixels = image_to_pixels(image)
+        reset_gif_protection()
+        static_pixels = await set_static_pixels(image_to_pixels(image))
     
-    await asyncio.gather(write_frame(pixels), broadcast_frame(pixels))
+    await asyncio.gather(write_frame(static_pixels), broadcast_frame(static_pixels))
     return {"status": "displayed", "id": image_id}
 
 
@@ -242,8 +294,15 @@ async def websocket_endpoint(websocket: WebSocket):
             token = message.get("auth")
             if token != PASSKEY:
                 continue
-            broadcast_task = asyncio.create_task(broadcast_pixel([{"x": x, "y": y, "r": r, "g": g, "b": b}]))
-            pixels[y][x] = (r, g, b)
+
+            async with pixels_lock:
+                if active_gif_id is not None:
+                    gif_protected_pixels.add((x, y))
+                pixels[y][x] = (r, g, b)
+
+            broadcast_task = asyncio.create_task(
+                broadcast_pixel([{"x": x, "y": y, "r": r, "g": g, "b": b}])
+            )
             await asyncio.to_thread(set_pixel, x, y, (r, g, b))
             await asyncio.to_thread(flush_pixels)
             await broadcast_task
