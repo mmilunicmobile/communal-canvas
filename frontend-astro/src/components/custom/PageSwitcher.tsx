@@ -1,5 +1,4 @@
 import { switchPage } from "@/scripts/main"
-import { Tabs, TabsTrigger, TabsList } from "@/components/ui/tabs"
 import { RiBrush3Line, RiFileImageLine, RiSettings2Line } from "@remixicon/react"
 import PressySquare from "./PressySquare"
 import { useEffect, useState } from "react"
@@ -19,17 +18,18 @@ export default function PageSwitcher( ) {
 
     return () => clearInterval(intervalId)
   }, [])
-  
-  useEffect(() => {
-    switchPage(active)
-  }, [active])
+
+  const handlePageSelect = (page: string) => {
+    setActive(page)
+    switchPage(page)
+  }
 
   return (
     <div className="flex space-x-1 bg-accent p-1">
       
-      <PressySquare onClick={() => setActive("paint")} active={active === "paint"}><RiBrush3Line className="w-full h-full"/></PressySquare>
-      <PressySquare onClick={() => setActive("images")} active={active === "images"} ><RiFileImageLine className="w-full h-full"/></PressySquare>
-      <PressySquare onClick={() => setActive("settings")} active={active === "settings"} ><RiSettings2Line className="w-full h-full"/></PressySquare>
+      <PressySquare onClick={() => handlePageSelect("paint")} active={active === "paint"}><RiBrush3Line className="w-full h-full"/></PressySquare>
+      <PressySquare onClick={() => handlePageSelect("images")} active={active === "images"} ><RiFileImageLine className="w-full h-full"/></PressySquare>
+      <PressySquare onClick={() => handlePageSelect("settings")} active={active === "settings"} ><RiSettings2Line className="w-full h-full"/></PressySquare>
       <div className="flex items-center justify-center px-2">
         <span
           className={`h-3 w-3 border rounded-full  ${connected ? "bg-emerald-500" : "bg-red-500"}`}

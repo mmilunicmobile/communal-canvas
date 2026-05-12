@@ -10,16 +10,58 @@ import ColorSwitcher from './custom/ColorSwitcher.tsx';
     main()
 </script>
 
-<div class="flex min-h-svh flex-col bg-background text-foreground">
+<div class="flex h-svh flex-col overflow-hidden bg-background text-foreground">
     <div class="flex justify-center pt-4">
         <PageSwitcher client:load />
     </div>
 
-    <div class="flex flex-1 items-center justify-center sm:px-4 py-4 px-0">
-        <MatrixCanvas canvasWidth={GRID_WIDTH} canvasHeight={GRID_HEIGHT} />
+    <div data-page-panel="paint" class="flex flex-1 min-h-0 flex-col overflow-hidden">
+        <div class="flex flex-1 items-center justify-center px-0 py-4 sm:px-4">
+            <MatrixCanvas canvasWidth={GRID_WIDTH} canvasHeight={GRID_HEIGHT} />
+        </div>
+
+        <div class="flex justify-center pb-4">
+            <ColorSwitcher client:load />
+        </div>
     </div>
 
-    <div class="flex justify-center pb-4">
-        <ColorSwitcher client:load />
+    <div data-page-panel="images" style="display: none;" class="flex flex-1 min-h-0 flex-col overflow-hidden px-4 py-4">
+        <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+            <div class="flex items-end justify-between gap-3">
+                <div>
+                    <p class="text-sm font-medium">Gallery</p>
+                    <p class="text-xs text-muted-foreground">Click a tile to display it. Drag files here to upload.</p>
+                </div>
+                <p id="gallery-status" class="text-xs text-muted-foreground"></p>
+            </div>
+
+            <div
+                id="gallery-drop-zone"
+                class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-none border border-dashed border-border/60 bg-card/40 p-3 transition-all"
+            >
+                <div
+                    id="gallery-grid"
+                    class="grid min-h-0 flex-1 auto-rows-min gap-3 overflow-auto pr-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+                ></div>
+            </div>
+        </div>
+
+        <div class="mt-4 flex shrink-0 items-center justify-center gap-2 pb-0">
+            <button id="gallery-add-button" type="button" class="border border-border bg-accent px-3 py-2 text-xs font-medium text-foreground transition hover:border-foreground/40">
+                Add image
+            </button>
+            <button id="gallery-delete-mode-button" type="button" class="border border-border bg-accent px-3 py-2 text-xs font-medium text-foreground transition hover:border-foreground/40">
+                Delete mode: off
+            </button>
+        </div>
+
+        <input id="gallery-file-input" type="file" accept="image/*" class="hidden" />
+    </div>
+
+    <div data-page-panel="settings" style="display: none;" class="flex flex-1 items-center justify-center px-4 py-4">
+        <div class="max-w-sm text-center">
+            <p class="text-sm font-medium">Settings</p>
+            <p class="text-xs text-muted-foreground">This page is reserved for future controls.</p>
+        </div>
     </div>
 </div>
