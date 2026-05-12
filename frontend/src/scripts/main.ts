@@ -24,6 +24,25 @@ export const state = {
     ws: null as null | WebSocket, // WebSocket connection to backend. if null, we are not connected.
 }
 
+function getBackendBaseUrl() {
+    const configuredHost = state.backendUrl.trim()
+    if (!configuredHost) {
+        return window.location.origin
+    }
+
+    const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:'
+    return `${protocol}//${configuredHost}`
+}
+
+function getBackendWebSocketUrl() {
+    const baseUrl = new URL(getBackendBaseUrl())
+    baseUrl.protocol = baseUrl.protocol === 'https:' ? 'wss:' : 'ws:'
+    baseUrl.pathname = '/ws'
+    baseUrl.search = ''
+    baseUrl.hash = ''
+    return baseUrl.toString()
+}
+
 export function main() {
     const canvas = document.querySelector('canvas.matrix-canvas') as HTMLCanvasElement | null
     if (!canvas) {
@@ -31,7 +50,7 @@ export function main() {
     }
 
     const backendUrl = localStorage.getItem('backendUrl')
-    if (backendUrl) {
+    if (backendUrl !== null) {
         state.backendUrl = backendUrl
     }
 
@@ -42,7 +61,7 @@ export function main() {
 
     const setupWSPoller = () => {
         if (!state.ws) {
-            setupWSListener(state.backendUrl, (update) => putPixel(canvas, update))
+            setupWSListener((update) => putPixel(canvas, update))
         }
     }
 
@@ -78,7 +97,7 @@ function authHeaders(headers?: HeadersInit) {
 }
 
 async function requestJson<T>(path: string, options: RequestInit = {}) {
-    const response = await fetch(`${state.backendUrl}${path}`, {
+    const response = await fetch(`${getBackendBaseUrl()}${path}`, {
         ...options,
         headers: authHeaders(options.headers),
     })
@@ -123,7 +142,7 @@ async function deleteImage(imageId: number) {
 }
 
 function imageUrl(imageId: number) {
-    return `${state.backendUrl}/api/images/${imageId}/file`
+    return `${getBackendBaseUrl()}/api/images/${imageId}/file`
 }
 
 function setPageVisibility(activePage: string) {
@@ -337,9 +356,8 @@ function setupSettingsPage() {
     // Save backend URL on change
     backendUrlInput.addEventListener('change', () => {
         const value = backendUrlInput.value.trim()
-        if (value) {
-            setBackendUrl(value)
-        }
+        setBackendUrl(value)
+        backendUrlInput.value = value
     })
 
     // Save passkey on change
@@ -353,18 +371,15 @@ function setupSettingsPage() {
         localStorage.removeItem('backendUrl')
         localStorage.removeItem('passkey')
         state.backendUrl = BACKEND_URL_DEFAULT
-        state.passkey = 'changeme'
+        state.passkey = ''
         updateInputs()
     })
 }
 
-function setupWSListener(backendUrl: string, pixelUpdate: (update: PixelUpdate) => void) {
+function setupWSListener(pixelUpdate: (update: PixelUpdate) => void) {
     state.ws?.close()
     state.ws = null
-    // Convert http/https to ws/wss
-    const wsUrl = backendUrl
-        .replace(/^http:/, 'ws:')
-        .replace(/^https:/, 'wss:') + '/ws'
+    const wsUrl = getBackendWebSocketUrl()
     
     const ws = new WebSocket(wsUrl)
     ws.onopen = () => { state.ws = ws; console.log('websocket opened') }
