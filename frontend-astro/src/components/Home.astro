@@ -1,0 +1,30 @@
+---
+import MatrixCanvas from "./custom/MatrixCanvas.astro";
+import { GRID_WIDTH, GRID_HEIGHT } from '../scripts/constants'
+import PageSwitcher from './custom/PageSwitcher.tsx';
+import ColorSwitcher from './custom/ColorSwitcher.tsx';
+---
+
+<script>
+    import { main } from '../scripts/main'
+    main()
+</script>
+
+<div class="grid min-h-svh grid-rows-[4rem_minmax(0,1fr)_4rem] bg-background text-foreground">
+    <header class="flex h-16 items-center border-b border-border px-4 sm:px-6 ">
+        <PageSwitcher client:load /> <ColorSwitcher client:load />
+    </header>
+
+    <main class="min-h-0 px-0 py-4 sm:px-4">
+        <div class="flex h-full min-h-0 items-center justify-center">
+            <MatrixCanvas canvasWidth={GRID_WIDTH} canvasHeight={GRID_HEIGHT} />
+        </div>
+    </main>
+
+    <footer class="flex h-16 items-center border-t border-border px-4 text-xs text-muted-foreground sm:px-6">
+        <div class="flex w-full items-center justify-between">
+            <span>Canvas Lights</span>
+            <span>{GRID_WIDTH} × {GRID_HEIGHT}</span>
+        </div>
+    </footer>
+</div>

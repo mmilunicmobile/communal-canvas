@@ -1,0 +1,18 @@
+---
+// this component is used to display a canvas. It is a n by m grid of pixels that can be painted on.
+
+const { canvasWidth, canvasHeight } = Astro.props;
+const aspectRatio = canvasWidth / canvasHeight;
+---
+
+<div
+  class="matrix-canvas-shell mx-auto flex h-full w-full max-w-full items-center justify-center"
+  style={{ width: `min(100%, calc((100svh - 10rem) * ${aspectRatio}))` }}
+>
+  <canvas
+    width={canvasWidth}
+    height={canvasHeight}
+    class="matrix-canvas block h-auto w-full cursor-crosshair bg-black"
+    style={{ imageRendering: 'pixelated' }}
+  />
+</div>
