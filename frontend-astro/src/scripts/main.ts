@@ -18,7 +18,7 @@ export type ImageRecord = {
 
 export const state = {
     backendUrl: BACKEND_URL_DEFAULT,
-    passkey: 'changeme',
+    passkey: '',
     color: '#ff00000',
     currentPage: 'paint',
     ws: null as null | WebSocket, // WebSocket connection to backend. if null, we are not connected.
@@ -28,6 +28,11 @@ export function main() {
     const canvas = document.querySelector('canvas.matrix-canvas') as HTMLCanvasElement | null
     if (!canvas) {
         return
+    }
+
+    const backendUrl = localStorage.getItem('backendUrl')
+    if (backendUrl) {
+        state.backendUrl = backendUrl
     }
 
     const passkey = localStorage.getItem('passkey')
@@ -44,6 +49,7 @@ export function main() {
     // Setup mouse drawing
     setupCanvasDrawing(canvas)
     setupGalleryPage()
+    setupSettingsPage()
 
     setupWSPoller()
     switchPage('paint')
@@ -53,6 +59,14 @@ export function main() {
 export function setPasskey(passkey: string) {
     state.passkey = passkey
     localStorage.setItem('passkey', passkey)
+}
+
+export function setBackendUrl(url: string) {
+    state.backendUrl = url
+    localStorage.setItem('backendUrl', url)
+    // Close existing connection to trigger reconnect on next poll
+    state.ws?.close()
+    state.ws = null
 }
 
 function authHeaders(headers?: HeadersInit) {
@@ -301,6 +315,47 @@ function setupGalleryPage() {
     updateDeleteModeLabel()
     renderImages()
     refreshImages()
+}
+
+function setupSettingsPage() {
+    const backendUrlInput = document.getElementById('settings-backend-url') as HTMLInputElement | null
+    const passkeyInput = document.getElementById('settings-passkey') as HTMLInputElement | null
+    const resetButton = document.getElementById('settings-reset-button') as HTMLButtonElement | null
+
+    if (!backendUrlInput || !passkeyInput || !resetButton) {
+        return
+    }
+
+    // Load current values into inputs
+    const updateInputs = () => {
+        backendUrlInput.value = state.backendUrl
+        passkeyInput.value = state.passkey
+    }
+
+    updateInputs()
+
+    // Save backend URL on change
+    backendUrlInput.addEventListener('change', () => {
+        const value = backendUrlInput.value.trim()
+        if (value) {
+            setBackendUrl(value)
+        }
+    })
+
+    // Save passkey on change
+    passkeyInput.addEventListener('change', () => {
+        const value = passkeyInput.value.trim()
+        setPasskey(value)
+    })
+
+    // Reset to defaults
+    resetButton.addEventListener('click', () => {
+        localStorage.removeItem('backendUrl')
+        localStorage.removeItem('passkey')
+        state.backendUrl = BACKEND_URL_DEFAULT
+        state.passkey = 'changeme'
+        updateInputs()
+    })
 }
 
 function setupWSListener(backendUrl: string, pixelUpdate: (update: PixelUpdate) => void) {
