@@ -10,7 +10,7 @@ export type PixelUpdate = {
 
 export const state = {
     backendUrl: BACKEND_URL_DEFAULT,
-    passkey: '',
+    passkey: 'changeme',
     color: '#ff00000',
     ws: null as null | WebSocket, // WebSocket connection to backend. if null, we are not connected.
 }

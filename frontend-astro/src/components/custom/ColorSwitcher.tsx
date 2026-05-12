@@ -49,16 +49,17 @@ export default function ColorSwitcher( ) {
         ))
       }
       <PressySquare onClick={handleCustomColorClick} active={active === "custom"}>
-        < RiSipLine className={`m-auto w-full h-full transition-all ${(active === "custom") ? (contrastingColor(customColor) ? "text-white" : "text-black") : (contrastingColor(customColor) ? "hover:text-white text-gray-450" : "hover:text-black text-gray-700")}`} style={{ backgroundColor: customColor }} />
-        <input 
+        <div className="relative w-full h-full">
+          <input 
           ref={colorInputRef} 
           type="color" 
           value={customColor} 
           onChange={handleColorChange}
-          className="invisible relative w-full h-full -top-full"
+          className="absolute top-0 left-0 invisible w-full h-full"
         />
+        < RiSipLine className={`absolute top-0 left-0 w-full h-full transition-all ${(active === "custom") ? (contrastingColor(customColor) ? "text-white" : "text-black") : (contrastingColor(customColor) ? "hover:text-white text-gray-450" : "hover:text-black text-gray-700")}`} style={{ backgroundColor: customColor }} />
+      </div>
       </PressySquare>
-      
     </div>
   )
 }
