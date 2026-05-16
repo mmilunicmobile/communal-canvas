@@ -10,9 +10,11 @@ from fastapi import (
     File,
     Header,
     HTTPException,
+    Request,
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
+    status,
 )
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +23,7 @@ from PIL import Image
 
 import database
 from constants import (
+    DEFAULT_BRIGHTNESS,
     GRID_HEIGHT,
     GRID_WIDTH,
     PASSKEY,
@@ -53,8 +56,10 @@ connections = set()
 connections_lock = asyncio.Lock()
 animation_task = None
 pixels_lock = asyncio.Lock()
+render_lock = asyncio.Lock()
 gif_protected_pixels = set()
 active_gif_id = None
+current_brightness = DEFAULT_BRIGHTNESS
 
 app.add_middleware(
     CORSMiddleware,
@@ -68,6 +73,51 @@ app.add_middleware(
 def require_admin(authorization: str = Header(None)):
     if authorization != f"Bearer {PASSKEY}":
         raise HTTPException(status_code=403, detail="Admin passkey required.")
+
+
+def token_is_admin(token):
+    return token == PASSKEY
+
+
+def authorization_token(authorization):
+    if not authorization:
+        return None
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return None
+    return token
+
+
+def caller_can(feature, token):
+    settings = database.list_permission_settings()
+    requires_passkey = settings.get(feature, True)
+    return not requires_passkey or token_is_admin(token)
+
+
+def require_permission(feature):
+    def dependency(request: Request, authorization: str = Header(None)):
+        token = authorization_token(authorization) or request.query_params.get("auth")
+        if not caller_can(feature, token):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"{feature.replace('_', ' ').title()} permission required.",
+            )
+
+    return dependency
+
+
+def availability_for_token(token):
+    settings = database.list_permission_settings()
+    return {
+        "passkey_valid": token_is_admin(token),
+        "permissions": {
+            feature: {
+                "requires_passkey": requires_passkey,
+                "available": not requires_passkey or token_is_admin(token),
+            }
+            for feature, requires_passkey in settings.items()
+        },
+    }
 
 
 def image_path(record):
@@ -121,11 +171,27 @@ async def _send_pixel(websocket, messages):
         return False
 
 async def write_frame(pixels):
-    await asyncio.to_thread(set_frame, pixels)
-    await asyncio.to_thread(flush_pixels)
+    async with render_lock:
+        await asyncio.to_thread(set_frame, pixels)
+        await asyncio.to_thread(flush_pixels)
+
+
+def write_single_pixel(x, y, rgb):
+    set_pixel(x, y, rgb)
+    flush_pixels()
 
 async def broadcast_frame(pixels):
     await broadcast_pixel(list(pixel_messages_from_frame(pixels)))
+
+
+def parse_brightness_value(value):
+    try:
+        brightness = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("brightness must be a number.") from exc
+    if brightness < 0 or brightness > 1:
+        raise ValueError("brightness must be between 0 and 1.")
+    return brightness
 
 
 def cancel_animation():
@@ -169,8 +235,8 @@ async def apply_gif_frame(frame_pixels, gif_id):
 
 async def play_gif(path, gif_id):
     try:
-        while True:
-            with Image.open(path) as image:
+        with Image.open(path) as image:
+            while True:
                 for frame_index, frame in enumerate(iter_rendered_gif_frames(image)):
                     frame_pixels = image_to_pixels(frame)
                     previous_pixels, pixels_to_show = await apply_gif_frame(frame_pixels, gif_id)
@@ -182,16 +248,80 @@ async def play_gif(path, gif_id):
     except asyncio.CancelledError:
         raise
 
-@app.post("/api/brightness", dependencies=[Depends(require_admin)])
+@app.post("/api/brightness", dependencies=[Depends(require_permission("set_brightness"))])
 async def update_brightness(payload: dict):
+    global current_brightness
+
     brightness = payload.get("brightness")
     if brightness is None:
         raise HTTPException(status_code=422, detail="brightness is required.")
+    try:
+        brightness = parse_brightness_value(brightness)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     await asyncio.to_thread(set_brightness, brightness)
-    return {"brightness": int(brightness)}
+    current_brightness = brightness
+    return {"brightness": brightness}
 
 
-@app.post("/api/clear", dependencies=[Depends(require_admin)])
+@app.get("/api/brightness", dependencies=[Depends(require_permission("view_board"))])
+def get_brightness():
+    return {"brightness": current_brightness}
+
+
+@app.get("/api/permissions/settings", dependencies=[Depends(require_admin)])
+def get_permission_settings():
+    return {"permissions": database.list_permission_settings()}
+
+
+@app.put("/api/permissions/settings", dependencies=[Depends(require_admin)])
+def update_permission_settings(payload: dict):
+    permissions = payload.get("permissions")
+    if not isinstance(permissions, dict):
+        raise HTTPException(status_code=422, detail="permissions object is required.")
+    try:
+        settings = database.update_permission_settings(permissions)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"permissions": settings}
+
+
+@app.get("/api/permissions/availability")
+def get_permission_availability(request: Request, authorization: str = Header(None)):
+    token = authorization_token(authorization) or request.query_params.get("auth")
+    return availability_for_token(token)
+
+
+@app.post("/api/commands", dependencies=[Depends(require_permission("run_commands"))])
+async def run_command(payload: dict):
+    command = payload.get("command")
+    if not isinstance(command, str) or not command.strip():
+        raise HTTPException(status_code=422, detail="command is required.")
+
+    normalized = command.strip().lower()
+    if normalized == "rainbow":
+        cancel_animation()
+        reset_gif_protection()
+        rainbow = []
+        colors = [
+            (255, 0, 0),
+            (255, 127, 0),
+            (255, 255, 0),
+            (0, 255, 0),
+            (0, 0, 255),
+            (75, 0, 130),
+            (148, 0, 211),
+        ]
+        for y in range(GRID_HEIGHT):
+            rainbow.append([colors[(x + y) % len(colors)] for x in range(GRID_WIDTH)])
+        pixels_to_show = await set_static_pixels(rainbow)
+        await asyncio.gather(write_frame(pixels_to_show), broadcast_frame(pixels_to_show))
+        return {"status": "ok", "message": "Rainbow displayed."}
+
+    return {"status": "unknown", "message": f"Unknown command: {command.strip()}"}
+
+
+@app.post("/api/clear", dependencies=[Depends(require_permission("clear_board"))])
 async def clear():
     cancel_animation()
     reset_gif_protection()
@@ -202,12 +332,12 @@ async def clear():
     return {"pixels": pixels}
 
 
-@app.get("/api/images")
+@app.get("/api/images", dependencies=[Depends(require_permission("list_images"))])
 def list_images():
     return database.list_images()
 
 
-@app.get("/api/images/{image_id}/file")
+@app.get("/api/images/{image_id}/file", dependencies=[Depends(require_permission("view_images"))])
 def read_image_file(image_id: int):
     record = database.get_image(image_id)
     if record is None:
@@ -218,7 +348,7 @@ def read_image_file(image_id: int):
     return FileResponse(path)
 
 
-@app.post("/api/images/upload", dependencies=[Depends(require_admin)])
+@app.post("/api/images/upload", dependencies=[Depends(require_permission("upload_images"))])
 async def upload_image(file: UploadFile = File(...)):
     try:
         file_bytes = await file.read()
@@ -233,7 +363,7 @@ async def upload_image(file: UploadFile = File(...)):
     return database.create_image(filename, file.filename or filename, image_type)
 
 
-@app.post("/api/images/{image_id}/display", dependencies=[Depends(require_admin)])
+@app.post("/api/images/{image_id}/display", dependencies=[Depends(require_permission("display_images"))])
 async def display_image(image_id: int):
     global animation_task
     global active_gif_id
@@ -261,7 +391,7 @@ async def display_image(image_id: int):
     return {"status": "displayed", "id": image_id}
 
 
-@app.delete("/api/images/{image_id}", dependencies=[Depends(require_admin)])
+@app.delete("/api/images/{image_id}", dependencies=[Depends(require_permission("delete_images"))])
 async def delete_image(image_id: int):
     record = await asyncio.to_thread(database.delete_image, image_id)
     if record is None:
@@ -276,6 +406,11 @@ async def delete_image(image_id: int):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    token = websocket.query_params.get("auth") or None
+    if not caller_can("view_board", token):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
     await websocket.accept()
     async with connections_lock:
         connections.add(websocket)
@@ -286,13 +421,27 @@ async def websocket_endpoint(websocket: WebSocket):
 
         while True:
             message = await websocket.receive_json()
+            message_token = message.get("auth")
+            message_type = message.get("type", "pixel")
+
+            if message_type == "brightness":
+                global current_brightness
+                if not caller_can("set_brightness", message_token):
+                    continue
+                try:
+                    brightness = parse_brightness_value(message.get("brightness"))
+                except ValueError:
+                    continue
+                await asyncio.to_thread(set_brightness, brightness)
+                current_brightness = brightness
+                continue
+
             x = int(message["x"])
             y = int(message["y"])
             r = int(message["r"])
             g = int(message["g"])
             b = int(message["b"])
-            token = message.get("auth")
-            if token != PASSKEY:
+            if not caller_can("draw_board", message_token):
                 continue
 
             async with pixels_lock:
@@ -303,8 +452,8 @@ async def websocket_endpoint(websocket: WebSocket):
             broadcast_task = asyncio.create_task(
                 broadcast_pixel([{"x": x, "y": y, "r": r, "g": g, "b": b}])
             )
-            await asyncio.to_thread(set_pixel, x, y, (r, g, b))
-            await asyncio.to_thread(flush_pixels)
+            async with render_lock:
+                await asyncio.to_thread(write_single_pixel, x, y, (r, g, b))
             await broadcast_task
             
     except WebSocketDisconnect:
@@ -320,5 +469,4 @@ app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run(app, host="0.0.0.0", port=8000)

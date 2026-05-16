@@ -1,5 +1,5 @@
 import { switchPage } from "@/scripts/main"
-import { RiBrush3Line, RiFileImageLine, RiSettings2Line } from "@remixicon/react"
+import { RiBrush3Line, RiFileImageLine, RiSettings2Line, RiTerminalBoxLine } from "@remixicon/react"
 import PressySquare from "./PressySquare"
 import { useEffect, useState } from "react"
 import { state } from "@/scripts/main"
@@ -29,6 +29,7 @@ export default function PageSwitcher( ) {
       
       <PressySquare onClick={() => handlePageSelect("paint")} active={active === "paint"}><RiBrush3Line className="w-full h-full"/></PressySquare>
       <PressySquare onClick={() => handlePageSelect("images")} active={active === "images"} ><RiFileImageLine className="w-full h-full"/></PressySquare>
+      <PressySquare onClick={() => handlePageSelect("commands")} active={active === "commands"} ><RiTerminalBoxLine className="w-full h-full"/></PressySquare>
       <PressySquare onClick={() => handlePageSelect("settings")} active={active === "settings"} ><RiSettings2Line className="w-full h-full"/></PressySquare>
       <div className="flex items-center justify-center px-2">
         <span

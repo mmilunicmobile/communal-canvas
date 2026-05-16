@@ -1,12 +1,22 @@
 import os
 import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
+from constants import DEFAULT_PERMISSION_SETTINGS
+from contextlib import contextmanager
+
+DB_PATH = Path(__file__).resolve().parent / "canvaslights.db"
 
 
+@contextmanager
 def get_connection():
-    connection = sqlite3.connect("canvaslights.db")
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
-    return connection
+    try:
+        yield connection
+    finally:
+        connection.close()
 
 
 def init_db():
@@ -21,6 +31,24 @@ def init_db():
                 uploaded_at TEXT NOT NULL
             )
             """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS permission_settings (
+                feature TEXT PRIMARY KEY,
+                requires_passkey INTEGER NOT NULL
+            )
+            """
+        )
+        connection.executemany(
+            """
+            INSERT OR IGNORE INTO permission_settings (feature, requires_passkey)
+            VALUES (?, ?)
+            """,
+            [
+                (feature, int(requires_passkey))
+                for feature, requires_passkey in DEFAULT_PERMISSION_SETTINGS.items()
+            ],
         )
 
 
@@ -78,4 +106,34 @@ def delete_image(image_id):
 
 
 def db_path():
-    return os.path.abspath("canvaslights.db")
+    return os.path.abspath(DB_PATH)
+
+
+def list_permission_settings():
+    with get_connection() as connection:
+        rows = connection.execute(
+            "SELECT feature, requires_passkey FROM permission_settings"
+        ).fetchall()
+
+    settings = DEFAULT_PERMISSION_SETTINGS.copy()
+    settings.update({row["feature"]: bool(row["requires_passkey"]) for row in rows})
+    return settings
+
+
+def update_permission_settings(settings):
+    allowed_features = set(DEFAULT_PERMISSION_SETTINGS)
+    unknown_features = set(settings) - allowed_features
+    if unknown_features:
+        raise ValueError(f"Unknown permission feature: {', '.join(sorted(unknown_features))}")
+
+    with get_connection() as connection:
+        connection.executemany(
+            """
+            INSERT INTO permission_settings (feature, requires_passkey)
+            VALUES (?, ?)
+            ON CONFLICT(feature) DO UPDATE SET requires_passkey = excluded.requires_passkey
+            """,
+            [(feature, int(bool(requires_passkey))) for feature, requires_passkey in settings.items()],
+        )
+
+    return list_permission_settings()

@@ -20,7 +20,7 @@ import ColorSwitcher from './custom/ColorSwitcher.tsx';
             <MatrixCanvas canvasWidth={GRID_WIDTH} canvasHeight={GRID_HEIGHT} />
         </div>
 
-        <div class="flex justify-center pb-4">
+        <div id="paint-color-switcher" class="flex justify-center pb-4">
             <ColorSwitcher client:load />
         </div>
     </div>
@@ -58,8 +58,60 @@ import ColorSwitcher from './custom/ColorSwitcher.tsx';
         <input id="gallery-file-input" type="file" accept="image/*" class="hidden" />
     </div>
 
-    <div data-page-panel="settings" style="display: none;" class="flex flex-1 flex-col overflow-hidden px-4 py-4">
-        <div class="flex flex-col gap-6">
+    <div data-page-panel="commands" style="display: none;" class="flex flex-1 min-h-0 flex-col overflow-auto px-4 py-4">
+        <div class="mx-auto flex w-full max-w-3xl flex-col gap-6">
+            <div class="flex items-end justify-between gap-3">
+                <div>
+                    <p class="text-sm font-medium">Commands</p>
+                    <p class="text-xs text-muted-foreground">Adjust display controls and passkey requirements.</p>
+                </div>
+                <p id="commands-status" class="text-xs text-muted-foreground"></p>
+            </div>
+
+            <section class="flex flex-col gap-3 border border-border bg-card p-4">
+                <div class="flex items-center justify-between gap-3">
+                    <label for="commands-brightness" class="text-xs font-medium">Brightness</label>
+                    <span id="commands-brightness-value" class="text-xs text-muted-foreground">20%</span>
+                </div>
+                <input
+                    id="commands-brightness"
+                    type="range"
+                    min="0"
+                    max="100"
+                    value="20"
+                    class="w-full accent-primary"
+                />
+            </section>
+
+            <section class="flex flex-col gap-3 border border-border bg-card p-4">
+                <div>
+                    <p class="text-xs font-medium">Permission Requirements</p>
+                    <p class="text-[11px] text-muted-foreground">On means that feature requires the admin passkey.</p>
+                </div>
+                <div id="commands-permissions" class="grid gap-2 sm:grid-cols-2"></div>
+            </section>
+
+            <section class="flex flex-col gap-3 border border-border bg-card p-4">
+                <label for="commands-input" class="text-xs font-medium">Command Line</label>
+                <form id="commands-form" class="flex gap-2">
+                    <input
+                        id="commands-input"
+                        type="text"
+                        autocomplete="off"
+                        placeholder="rainbow"
+                        class="min-w-0 flex-1 border border-border bg-background px-3 py-2 text-xs text-foreground placeholder-muted-foreground transition focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
+                    <button type="submit" class="border border-border bg-accent px-3 py-2 text-xs font-medium text-foreground transition hover:border-foreground/40">
+                        Send
+                    </button>
+                </form>
+                <p id="commands-output" class="min-h-4 text-xs text-muted-foreground"></p>
+            </section>
+        </div>
+    </div>
+
+    <div data-page-panel="settings" style="display: none;" class="flex flex-1 min-h-0 flex-col overflow-auto px-4 py-4">
+        <div class="mx-auto flex w-full max-w-3xl flex-col gap-6">
             <div>
                 <p class="text-sm font-medium">Settings</p>
                 <p class="text-xs text-muted-foreground">Configure connection and authentication.</p>
@@ -85,13 +137,21 @@ import ColorSwitcher from './custom/ColorSwitcher.tsx';
                         placeholder="changeme"
                         class="border border-border bg-card px-3 py-2 text-xs text-foreground placeholder-muted-foreground transition focus:outline-none focus:ring-1 focus:ring-primary"
                     />
-                    <p class="text-[11px] text-muted-foreground">Required to upload and manage images.</p>
+                    <p class="text-[11px] text-muted-foreground">Used for any feature that currently requires the passkey.</p>
                 </div>
 
                 <div class="flex gap-2">
                     <button id="settings-reset-button" type="button" class="border border-border bg-accent px-3 py-2 text-xs font-medium text-foreground transition hover:border-foreground/40">
                         Reset to defaults
                     </button>
+                </div>
+
+                <div class="flex flex-col gap-3 border border-border bg-card p-4">
+                    <div>
+                        <p class="text-xs font-medium">Access Status</p>
+                        <p class="text-[11px] text-muted-foreground">Shows what the current passkey and anonymous visitors can do.</p>
+                    </div>
+                    <div id="settings-access-status" class="grid gap-2 sm:grid-cols-2"></div>
                 </div>
             </div>
         </div>

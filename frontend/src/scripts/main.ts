@@ -16,11 +16,49 @@ export type ImageRecord = {
     uploaded_at: string
 }
 
+type PermissionFeature =
+    | 'view_board'
+    | 'draw_board'
+    | 'clear_board'
+    | 'list_images'
+    | 'view_images'
+    | 'upload_images'
+    | 'display_images'
+    | 'delete_images'
+    | 'set_brightness'
+    | 'run_commands'
+
+type PermissionSettings = Record<PermissionFeature, boolean>
+
+type PermissionAvailability = {
+    passkey_valid: boolean
+    permissions: Record<PermissionFeature, {
+        requires_passkey: boolean
+        available: boolean
+    }>
+}
+
+const permissionLabels: Record<PermissionFeature, string> = {
+    view_board: 'View board',
+    draw_board: 'Draw on board',
+    clear_board: 'Clear board',
+    list_images: 'List images',
+    view_images: 'View image files',
+    upload_images: 'Upload images',
+    display_images: 'Display images',
+    delete_images: 'Delete images',
+    set_brightness: 'Set brightness',
+    run_commands: 'Run commands',
+}
+
+const permissionFeatures = Object.keys(permissionLabels) as PermissionFeature[]
+
 export const state = {
     backendUrl: BACKEND_URL_DEFAULT,
     passkey: '',
     color: '#ff00000',
     currentPage: 'paint',
+    canDraw: false,
     ws: null as null | WebSocket, // WebSocket connection to backend. if null, we are not connected.
 }
 
@@ -68,7 +106,9 @@ export function main() {
     // Setup mouse drawing
     setupCanvasDrawing(canvas)
     setupGalleryPage()
+    setupCommandsPage()
     setupSettingsPage()
+    refreshPaintAccess()
 
     setupWSPoller()
     switchPage('paint')
@@ -78,6 +118,9 @@ export function main() {
 export function setPasskey(passkey: string) {
     state.passkey = passkey
     localStorage.setItem('passkey', passkey)
+    state.ws?.close()
+    state.ws = null
+    refreshPaintAccess()
 }
 
 export function setBackendUrl(url: string) {
@@ -86,6 +129,7 @@ export function setBackendUrl(url: string) {
     // Close existing connection to trigger reconnect on next poll
     state.ws?.close()
     state.ws = null
+    refreshPaintAccess()
 }
 
 function authHeaders(headers?: HeadersInit) {
@@ -96,10 +140,10 @@ function authHeaders(headers?: HeadersInit) {
     return merged
 }
 
-async function requestJson<T>(path: string, options: RequestInit = {}) {
+async function requestJson<T>(path: string, options: RequestInit = {}, includeAuth = true) {
     const response = await fetch(`${getBackendBaseUrl()}${path}`, {
         ...options,
-        headers: authHeaders(options.headers),
+        headers: includeAuth ? authHeaders(options.headers) : new Headers(options.headers),
     })
 
     if (!response.ok) {
@@ -142,7 +186,47 @@ async function deleteImage(imageId: number) {
 }
 
 function imageUrl(imageId: number) {
-    return `${getBackendBaseUrl()}/api/images/${imageId}/file`
+    const url = new URL(`${getBackendBaseUrl()}/api/images/${imageId}/file`)
+    if (state.passkey) {
+        url.searchParams.set('auth', state.passkey)
+    }
+    return url.toString()
+}
+
+function sendWebSocketMessage(payload: Record<string, unknown>) {
+    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+        throw new Error('WebSocket is not connected.')
+    }
+
+    state.ws.send(JSON.stringify(payload))
+}
+
+async function getBrightness() {
+    return requestJson<{ brightness: number }>('/api/brightness')
+}
+
+async function getPermissionSettings() {
+    return requestJson<{ permissions: PermissionSettings }>('/api/permissions/settings')
+}
+
+async function updatePermissionSetting(feature: PermissionFeature, requiresPasskey: boolean) {
+    return requestJson<{ permissions: PermissionSettings }>('/api/permissions/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ permissions: { [feature]: requiresPasskey } }),
+    })
+}
+
+async function getPermissionAvailability(includeCurrentPasskey = true) {
+    return requestJson<PermissionAvailability>('/api/permissions/availability', {}, includeCurrentPasskey)
+}
+
+async function runCommand(command: string) {
+    return requestJson<{ status: string; message: string }>('/api/commands', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command }),
+    })
 }
 
 function setPageVisibility(activePage: string) {
@@ -157,6 +241,24 @@ function showGalleryStatus(message: string) {
     const status = document.getElementById('gallery-status')
     if (status) {
         status.textContent = message
+    }
+}
+
+function applyDrawAccess(canDraw: boolean) {
+    state.canDraw = canDraw
+
+    const palette = document.getElementById('paint-color-switcher')
+    if (palette) {
+        palette.style.display = canDraw ? '' : 'none'
+    }
+}
+
+async function refreshPaintAccess() {
+    try {
+        const availability = await getPermissionAvailability(true)
+        applyDrawAccess(availability.permissions.draw_board.available)
+    } catch {
+        applyDrawAccess(false)
     }
 }
 
@@ -336,12 +438,234 @@ function setupGalleryPage() {
     refreshImages()
 }
 
+let commandsInitialized = false
+let refreshCommandsPermissions = async () => {}
+
+function setupCommandsPage() {
+    if (commandsInitialized) {
+        return
+    }
+
+    const status = document.getElementById('commands-status')
+    const brightnessInput = document.getElementById('commands-brightness') as HTMLInputElement | null
+    const brightnessValue = document.getElementById('commands-brightness-value')
+    const permissionsContainer = document.getElementById('commands-permissions')
+    const commandForm = document.getElementById('commands-form') as HTMLFormElement | null
+    const commandInput = document.getElementById('commands-input') as HTMLInputElement | null
+    const commandOutput = document.getElementById('commands-output')
+
+    if (!brightnessInput || !brightnessValue || !permissionsContainer || !commandForm || !commandInput || !commandOutput) {
+        return
+    }
+
+    commandsInitialized = true
+
+    const showStatus = (message: string) => {
+        if (status) {
+            status.textContent = message
+        }
+    }
+
+    let lastBrightnessSent: number | null = null
+    let brightnessDeadlineTimer: number | undefined
+    let brightnessPending = false
+
+    const flushBrightness = () => {
+        window.clearTimeout(brightnessDeadlineTimer)
+        brightnessDeadlineTimer = undefined
+
+        const percent = Number(brightnessInput.value)
+        try {
+            sendWebSocketMessage({
+                type: 'brightness',
+                brightness: percent / 100,
+                auth: state.passkey,
+            })
+            lastBrightnessSent = percent
+            brightnessPending = false
+            showStatus(`Brightness set to ${percent}%`)
+        } catch (error) {
+            brightnessPending = true
+            showStatus(error instanceof Error ? error.message : 'Unable to set brightness')
+        }
+    }
+
+    const scheduleBrightnessSend = () => {
+        const percent = Number(brightnessInput.value)
+        brightnessValue.textContent = `${percent}%`
+
+        if (lastBrightnessSent === null || Math.abs(percent - lastBrightnessSent) >= 5) {
+            flushBrightness()
+            return
+        }
+
+        brightnessPending = true
+        if (brightnessDeadlineTimer === undefined) {
+            brightnessDeadlineTimer = window.setTimeout(() => {
+                if (brightnessPending) {
+                    flushBrightness()
+                }
+            }, 100)
+        }
+    }
+
+    const syncBrightnessFromBackend = async () => {
+        try {
+            const response = await getBrightness()
+            const percent = Math.round(response.brightness * 100)
+            brightnessInput.value = String(percent)
+            brightnessValue.textContent = `${percent}%`
+            lastBrightnessSent = percent
+        } catch (error) {
+            showStatus(error instanceof Error ? error.message : 'Unable to load brightness')
+        }
+    }
+
+    const renderPermissionToggles = (settings: PermissionSettings) => {
+        permissionsContainer.replaceChildren()
+
+        for (const feature of permissionFeatures) {
+            const label = document.createElement('label')
+            label.className = 'flex min-h-11 items-center justify-between gap-3 border border-border bg-background px-3 py-2 text-xs'
+
+            const text = document.createElement('span')
+            text.textContent = permissionLabels[feature]
+
+            const toggle = document.createElement('input')
+            toggle.type = 'checkbox'
+            toggle.checked = settings[feature]
+            toggle.className = 'h-4 w-4 accent-primary'
+            toggle.addEventListener('change', async () => {
+                toggle.disabled = true
+                try {
+                    const response = await updatePermissionSetting(feature, toggle.checked)
+                    renderPermissionToggles(response.permissions)
+                    showStatus(`${permissionLabels[feature]} updated`)
+                    refreshPaintAccess()
+                    refreshAccessStatus()
+                } catch (error) {
+                    toggle.checked = !toggle.checked
+                    showStatus(error instanceof Error ? error.message : 'Unable to update permissions')
+                } finally {
+                    toggle.disabled = false
+                }
+            })
+
+            label.append(text, toggle)
+            permissionsContainer.append(label)
+        }
+    }
+
+    refreshCommandsPermissions = async () => {
+        try {
+            showStatus('Loading permissions...')
+            const response = await getPermissionSettings()
+            renderPermissionToggles(response.permissions)
+            showStatus('Permissions loaded')
+        } catch (error) {
+            permissionsContainer.replaceChildren()
+            showStatus(error instanceof Error ? error.message : 'Unable to load permissions')
+        }
+    }
+
+    brightnessInput.addEventListener('input', scheduleBrightnessSend)
+
+    commandForm.addEventListener('submit', async (event) => {
+        event.preventDefault()
+        const command = commandInput.value.trim()
+        if (!command) {
+            commandOutput.textContent = 'Enter a command.'
+            return
+        }
+
+        try {
+            commandOutput.textContent = 'Sending...'
+            const response = await runCommand(command)
+            commandOutput.textContent = response.message
+            if (response.status === 'ok') {
+                commandInput.value = ''
+            }
+        } catch (error) {
+            commandOutput.textContent = error instanceof Error ? error.message : 'Command failed'
+        }
+    })
+
+    brightnessValue.textContent = `${Number(brightnessInput.value)}%`
+    syncBrightnessFromBackend()
+    refreshCommandsPermissions()
+}
+
+function renderAvailabilitySection(title: string, availability: PermissionAvailability) {
+    const section = document.createElement('div')
+    section.className = 'flex flex-col gap-2'
+
+    const heading = document.createElement('div')
+    heading.className = 'text-xs font-medium'
+    heading.textContent = title
+    section.append(heading)
+
+    const passkeyRow = document.createElement('div')
+    passkeyRow.className = 'flex items-center gap-2 text-[11px] text-muted-foreground'
+    const passkeyDot = document.createElement('span')
+    passkeyDot.className = `h-2.5 w-2.5 rounded-full ${availability.passkey_valid ? 'bg-emerald-500' : 'bg-red-500'}`
+    const passkeyText = document.createElement('span')
+    passkeyText.textContent = availability.passkey_valid ? 'Passkey accepted' : 'No valid passkey'
+    passkeyRow.append(passkeyDot, passkeyText)
+    section.append(passkeyRow)
+
+    for (const feature of permissionFeatures) {
+        const permission = availability.permissions[feature]
+        const row = document.createElement('div')
+        row.className = 'flex items-center justify-between gap-3 border border-border bg-background px-3 py-2 text-[11px]'
+
+        const label = document.createElement('span')
+        label.textContent = permissionLabels[feature]
+
+        const stateLabel = document.createElement('span')
+        stateLabel.className = 'flex items-center gap-2 whitespace-nowrap'
+        const dot = document.createElement('span')
+        dot.className = `h-2.5 w-2.5 rounded-full ${permission.available ? 'bg-emerald-500' : 'bg-red-500'}`
+        const text = document.createElement('span')
+        text.textContent = permission.available ? 'Allowed' : 'Blocked'
+        stateLabel.append(dot, text)
+        row.append(label, stateLabel)
+        section.append(row)
+    }
+
+    return section
+}
+
+async function refreshAccessStatus() {
+    const accessStatus = document.getElementById('settings-access-status')
+    if (!accessStatus) {
+        return
+    }
+
+    accessStatus.replaceChildren()
+    try {
+        const [current, anonymous] = await Promise.all([
+            getPermissionAvailability(true),
+            getPermissionAvailability(false),
+        ])
+        accessStatus.append(
+            renderAvailabilitySection('Current passkey', current),
+            renderAvailabilitySection('No passkey', anonymous),
+        )
+    } catch (error) {
+        const message = document.createElement('p')
+        message.className = 'text-xs text-muted-foreground'
+        message.textContent = error instanceof Error ? error.message : 'Unable to load access status'
+        accessStatus.append(message)
+    }
+}
+
 function setupSettingsPage() {
     const backendUrlInput = document.getElementById('settings-backend-url') as HTMLInputElement | null
     const passkeyInput = document.getElementById('settings-passkey') as HTMLInputElement | null
     const resetButton = document.getElementById('settings-reset-button') as HTMLButtonElement | null
+    const accessStatus = document.getElementById('settings-access-status')
 
-    if (!backendUrlInput || !passkeyInput || !resetButton) {
+    if (!backendUrlInput || !passkeyInput || !resetButton || !accessStatus) {
         return
     }
 
@@ -358,12 +682,16 @@ function setupSettingsPage() {
         const value = backendUrlInput.value.trim()
         setBackendUrl(value)
         backendUrlInput.value = value
+        refreshAccessStatus()
+        refreshCommandsPermissions()
     })
 
     // Save passkey on change
     passkeyInput.addEventListener('change', () => {
         const value = passkeyInput.value.trim()
         setPasskey(value)
+        refreshAccessStatus()
+        refreshCommandsPermissions()
     })
 
     // Reset to defaults
@@ -373,15 +701,24 @@ function setupSettingsPage() {
         state.backendUrl = BACKEND_URL_DEFAULT
         state.passkey = ''
         updateInputs()
+        state.ws?.close()
+        state.ws = null
+        refreshAccessStatus()
+        refreshCommandsPermissions()
     })
+
+    refreshAccessStatus()
 }
 
 function setupWSListener(pixelUpdate: (update: PixelUpdate) => void) {
     state.ws?.close()
     state.ws = null
-    const wsUrl = getBackendWebSocketUrl()
+    const wsUrl = new URL(getBackendWebSocketUrl())
+    if (state.passkey) {
+        wsUrl.searchParams.set('auth', state.passkey)
+    }
     
-    const ws = new WebSocket(wsUrl)
+    const ws = new WebSocket(wsUrl.toString())
     ws.onopen = () => { state.ws = ws; console.log('websocket opened') }
     ws.onclose = () => { 
         console.log('websocket closed')
@@ -433,6 +770,10 @@ function setupCanvasDrawing(canvas: HTMLCanvasElement) {
     }
 
     const drawPixel = (pixelCoords: { x: number; y: number }) => {
+        if (!state.canDraw) {
+            return
+        }
+
         // Parse color from hex to RGB
         const color = state.color.replace('#', '')
         const r = parseInt(color.substring(0, 2), 16)
@@ -464,6 +805,9 @@ function setupCanvasDrawing(canvas: HTMLCanvasElement) {
     }
 
     canvas.addEventListener('mousedown', (e) => {
+        if (!state.canDraw) {
+            return
+        }
         isDrawing = true
         const pixel = getPixelFromMouse(e)
         if (pixel) {
@@ -489,6 +833,9 @@ function setupCanvasDrawing(canvas: HTMLCanvasElement) {
 
     // Touch support for mobile
     canvas.addEventListener('touchstart', (e) => {
+        if (!state.canDraw) {
+            return
+        }
         isDrawing = true
         const touch = e.touches[0]
         const mouseEvent = new MouseEvent('mousedown', {
@@ -518,6 +865,15 @@ function setupCanvasDrawing(canvas: HTMLCanvasElement) {
 
 export function switchPage(page: string) {
     setPageVisibility(page)
+    if (page === 'commands') {
+        refreshCommandsPermissions()
+    }
+    if (page === 'paint') {
+        refreshPaintAccess()
+    }
+    if (page === 'settings') {
+        refreshAccessStatus()
+    }
 }
 
 export function switchColor(color: string) {

@@ -1,3 +1,5 @@
+import threading
+from pathlib import Path
 from typing import Tuple
 from constants import (
     DEFAULT_BRIGHTNESS,
@@ -13,6 +15,8 @@ from PIL import Image
 
 # Type alias for RGB color tuples
 RGBColor = Tuple[int, int, int]
+SIM_PATH = Path(__file__).resolve().parent / "sim.png"
+flush_lock = threading.Lock()
 
 def init_driver() -> None:
     """Initialize the LED driver for hardware or simulation mode.
@@ -93,12 +97,16 @@ def flush_pixels() -> None:
     For hardware mode, sends the buffered pixel data to the LED display.
     For simulation mode, saves the current state as 'sim.png'.
     """
-    if USE_HARDWARE:
-        leds.show()
-    else:
-        img = Image.new("RGB", (GRID_WIDTH, GRID_HEIGHT))
-        img.putdata(leds_sim)
-        img.save("sim.png")
+    with flush_lock:
+        if USE_HARDWARE:
+            leds.show()
+        else:
+            img = Image.new("RGB", (GRID_WIDTH, GRID_HEIGHT))
+            try:
+                img.putdata(leds_sim)
+                img.save(SIM_PATH)
+            finally:
+                img.close()
 
 def set_brightness(brightness: float) -> None:
     """Set the global brightness level for all LEDs.
