@@ -27,7 +27,8 @@ def init_driver() -> None:
     if USE_HARDWARE:
         global leds
         import neopixel # type: ignore
-        leds = neopixel.NeoPixel(LED_PIN, LED_COUNT, brightness=DEFAULT_BRIGHTNESS, pixel_order=PIXEL_ORDER, auto_write=False)
+        import board #type: ignore
+        leds = neopixel.NeoPixel(getattr(board, LED_PIN), LED_COUNT, brightness=DEFAULT_BRIGHTNESS, pixel_order=PIXEL_ORDER, auto_write=False)
         leds.fill((0,0,0))
     else:
         global leds_sim
@@ -119,3 +120,4 @@ def set_brightness(brightness: float) -> None:
     """
     if USE_HARDWARE:
         leds.brightness = brightness
+        leds.show()

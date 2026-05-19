@@ -15,6 +15,19 @@ def get_connection():
     connection.row_factory = sqlite3.Row
     try:
         yield connection
+    except Exception:
+        # Roll back any pending transaction on error
+        try:
+            connection.rollback()
+        except Exception:
+            pass
+        raise
+    else:
+        # Commit transaction if no exception occurred
+        try:
+            connection.commit()
+        except Exception:
+            pass
     finally:
         connection.close()
 
