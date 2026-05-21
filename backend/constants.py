@@ -1,3 +1,5 @@
+from os import environ as env
+
 GRID_WIDTH = 20
 GRID_HEIGHT = 15
 LED_COUNT = GRID_WIDTH * GRID_HEIGHT
@@ -6,7 +8,7 @@ LED_PIN = "D18"
 DEFAULT_BRIGHTNESS = 0.4
 PIXEL_ORDER = "BGR"
 
-PASSKEY = "changeme"
+PASSKEY = env.get("COMMUNAL_CANVAS_PASSKEY", "changeme")
 
 DEFAULT_PERMISSION_SETTINGS = {
     "view_board": False,
@@ -21,4 +23,4 @@ DEFAULT_PERMISSION_SETTINGS = {
     "run_commands": True,
 }
 
-USE_HARDWARE = True
+USE_HARDWARE = env.get("COMMUNAL_CANVAS_USE_HARDWARE", "False") == "True"
